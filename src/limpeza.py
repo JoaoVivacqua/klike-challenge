@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 
-# O arredondamento gera no máximo ~8% de diferença; os erros de registro, mais de 70%.
+# O arredondamento (cliques inteiros, roas com 2 casas) gera no máximo ~8% de diferença; os erros de registro, mais de 70%.
 TOLERANCIA = 0.2
 
 
@@ -27,7 +27,8 @@ def corrigir_inconsistencias(df, medianas):
     Entre a taxa registrada e a recalculada, fica a mais próxima da mediana da plataforma,
     e a outra coluna é recalculada. `coluna_corrigida` registra o que mudou.
     """
-    df = df.copy()
+    indice = df.index
+    df = df.reset_index(drop=True)  # as atribuições abaixo alinham pelo índice, que pode ter rótulos repetidos
     df["coluna_corrigida"] = None
     ref_ctr = df["platform"].map(medianas["ctr"])
     ref_cpc = df["platform"].map(medianas["cpc"])
@@ -53,4 +54,5 @@ def corrigir_inconsistencias(df, medianas):
     # sem uma terceira conta para desempatar, um roas que não fecha só é sinalizado
     roas_quebrado = _conta_quebrada(df["roas"], df["revenue"] / df["spend"]) & (df["revenue"] > 0)
     df.loc[roas_quebrado, "coluna_corrigida"] = "roas não fecha (não corrigido)"
+    df.index = indice
     return df
