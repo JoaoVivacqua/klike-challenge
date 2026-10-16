@@ -27,6 +27,8 @@ python -m notebook notebooks/
 │   └── klike_challenge_dataset.csv   # dataset original, sem alterações
 ├── notebooks/
 │   └── 01_eda.ipynb                  # Parte 1: análise exploratória
+├── src/
+│   └── limpeza.py                    # correção de inconsistências, usada na EDA e no pré-processamento
 ├── requirements.txt
 └── README.md
 ```
@@ -142,31 +144,94 @@ O que vimos:
 - 7 colunas têm vazios, entre 5% e 9% cada: `video_duration_s`, `has_subtitle`, `music_voice_ratio`, `cpc`, `revenue`, `avg_watch_time_s` e `engagement_rate`.
 - 62,5% das campanhas estão completas, e quase todas as outras têm um único campo vazio.
 - As taxas de vazios são parecidas entre Meta, TikTok e LinkedIn.
-- Em 6 das 7 colunas, as campanhas com vazio não diferem das demais em nenhuma característica: os valores parecem faltar ao acaso (MCAR).
-- A exceção é `avg_watch_time_s`: metade dos seus vazios (11 de 22) está nos 20% de campanhas com menos impressões. Uma explicação plausível é que, com poucas visualizações, a plataforma não reporta o tempo médio assistido. Isso indica vazios ligados a outra coluna (MAR).
+- Comparando as campanhas com e sem vazio em cada uma das outras variáveis, nenhuma diferença continua significativa após corrigir para comparações múltiplas: não há evidência contra MCAR.
+- A exceção provável é `avg_watch_time_s`: metade dos seus vazios (11 de 22) está nos 20% de campanhas com menos impressões, o que indica MAR. Uma explicação plausível é que, com poucas visualizações, a plataforma não reporta o tempo médio assistido.
 
 Decisão: o tratamento dos vazios fica para o pré-processamento (Parte 2), e não para a análise.
 
-Por quê: pelo mesmo motivo das correções de tipo, o tratamento precisa valer para qualquer base nova. O diagnóstico daqui orienta a escolha: para vazios ao acaso, preencher com um valor típico (ex: a mediana) é razoável; para `avg_watch_time_s`, o preenchimento deve considerar o tamanho da campanha, já que os vazios se concentram nas pequenas. Antes de decidir, o passo 4.3 verifica se `cpc` e `revenue` podem ser recalculados a partir de outras colunas (`spend / clicks` e `roas × spend`); se puderem, os vazios delas se resolvem com uma conta exata, sem estimativa.
+Por quê: pelo mesmo motivo das correções de tipo, o tratamento precisa valer para qualquer base nova. O diagnóstico daqui orienta a escolha: para vazios ao acaso, preencher com um valor típico (ex: a mediana) é razoável; para `avg_watch_time_s`, o preenchimento deve considerar o tamanho da campanha, já que os vazios se concentram nas pequenas. Os vazios de `cpc` e `revenue` não precisam de estimativa: o passo 4.3 mostra que todos podem ser recalculados por `spend / clicks` e `roas × spend`.
 
 <details>
-<summary><b>Como saber se um valor falta ao acaso?</b></summary>
+<summary><b>Como foi testado o mecanismo dos faltantes?</b></summary>
 
-Um valor pode faltar por três motivos, conhecidos pelas siglas em inglês MCAR, MAR e MNAR. Cada um pede um tratamento diferente:
+Para cada coluna com vazios, comparamos as campanhas com e sem o vazio nas demais variáveis: qui-quadrado nas categóricas e Mann-Whitney nas numéricas. Usamos Mann-Whitney em vez de comparar médias porque impressões, gasto e ROAS têm cauda longa (mesmo depois de corrigir os erros de registro do passo 4.3, a maior campanha tem cerca de 67 vezes as impressões da mediana), e uma única campanha extrema dominaria a média de um grupo.
 
-- MCAR (*Missing Completely At Random*, ao acaso): o vazio não tem relação com nada (ex: uma falha pontual de registro). Preencher com um valor típico funciona bem.
-- MAR (*Missing At Random*, ligado a outra coluna): o vazio aparece mais em certo tipo de campanha (ex: campanhas pequenas). O preenchimento precisa levar essa coluna em conta, senão distorce os dados.
-- MNAR (*Missing Not At Random*, ligado ao próprio valor): o vazio depende do valor que faltou (ex: um tempo assistido tão baixo que não foi registrado). Esse caso não pode ser verificado diretamente, porque o valor não existe.
+Foram 117 comparações, então os p-valores foram corrigidos pelo método de Holm. Sem a correção, 4 comparações têm p < 0,05, menos que as cerca de 6 esperadas só por acaso; com a correção, nenhuma é significativa.
 
-O nome MAR confunde: apesar de "At Random", o vazio não é aleatório, e sim explicado por colunas que temos. Para distinguir MCAR de MAR, o notebook compara, para cada coluna com vazios, as campanhas com e sem o vazio em todas as outras características. Para as categóricas (ex: plataforma) usamos o teste qui-quadrado, que verifica se as proporções diferem; para as numéricas (ex: impressões), o teste de Mann-Whitney, que compara as distribuições sem exigir que sigam uma curva normal. Se os vazios fossem MCAR, os dois grupos seriam parecidos. Esse teste não descarta MNAR: um vazio ligado ao próprio valor pode passar despercebido, porque o valor que faltou não está disponível para comparação.
+O teste só distingue MCAR de MAR. MNAR não pode ser verificado sem o valor ausente.
 
 </details>
 
 <details>
-<summary><b>Por que 4 diferenças em 117 testes não indicam um padrão?</b></summary>
+<summary><b>Por que avg_watch_time_s é tratado como exceção, se não passou na correção?</b></summary>
 
-Cada teste usa o limite usual de p < 0,05, o que significa aceitar 5% de chance de apontar uma diferença que não existe. Com 117 comparações, cerca de 6 dariam "diferença" por puro acaso, mesmo que todos os vazios fossem aleatórios. Encontramos 4, então o resultado geral é compatível com o acaso.
-
-`avg_watch_time_s` foi tratado como exceção porque não depende só do p-valor: as campanhas sem o valor têm cerca de três vezes menos impressões e gasto, o padrão aparece de forma nítida ao dividir as campanhas em faixas de tamanho, e existe uma explicação plausível para ele. Como o padrão foi encontrado depois de procurar, ele é tratado como hipótese provável, e não como certeza.
+A correção de Holm controla os falsos positivos de uma busca ampla, mas também reduz o poder de detectar efeitos reais com poucos casos (22 vazios). Três evidências se somam: os menores p-valores da busca (0,002 para impressões e 0,003 para gasto), medianas de impressões e gasto cerca de três vezes menores nas campanhas com vazio e uma concentração nítida na faixa das menores campanhas. Existe também um mecanismo plausível. Como o padrão foi encontrado depois de procurar, ele é tratado como hipótese provável de MAR, e não como certeza. MNAR também é plausível, se um tempo assistido muito baixo simplesmente não for registrado. Nos dois casos, uma coluna indicadora de falta preservaria essa informação para o modelo.
 
 </details>
+
+#### 4.2 Duplicatas
+
+O que vimos: nenhuma duplicata em quatro níveis de verificação: linhas idênticas, `campaign_id` repetido, linhas idênticas ignorando o `campaign_id` e campanhas com o mesmo contexto e o mesmo vídeo (plataforma, categoria, objetivo, público, retargeting e atributos do criativo). Também não há nenhuma campanha presente no treino e no teste ao mesmo tempo.
+
+Decisão: nenhuma linha removida. A checagem de sobreposição entre treino e teste é a única do EDA que usa o teste.
+
+Por quê: uma campanha repetida nos dois conjuntos seria vazamento de dados, porque o modelo seria avaliado em um exemplo já visto no treino. A checagem compara apenas se as linhas são iguais, sem calcular estatísticas nem olhar o `klike_score` do teste, então não influencia nenhuma decisão de análise. Os níveis mais amplos cobrem o caso de uma mesma campanha cadastrada duas vezes com IDs ou métricas diferentes, que um teste de linhas idênticas não pegaria.
+
+#### 4.3 Valores impossíveis e inconsistentes
+
+O que vimos:
+
+- Nenhuma violação das regras que valem por definição: sem valores negativos, cliques nunca acima das impressões, conversões nunca acima dos cliques, tempo assistido nunca acima da duração do vídeo, taxas entre 0 e 1 e datas dentro de 2024.
+- As métricas derivadas (`ctr = clicks / impressions`, `cpc = spend / clicks`, `roas = revenue / spend`) fecham com até 10% de diferença por arredondamento, exceto em 10 campanhas, em que a diferença passa de 70%. Não há casos intermediários.
+- Cada uma dessas 10 campanhas tem exatamente uma coluna com erro de registro:
+
+| Coluna com erro | Campanhas | Valor registrado | Valor recuperado |
+|---|---|---|---|
+| `impressions` | KLK-0148, 0232, 0258, 0413 | 12,6 a 14,1 milhões | 11.695 a 86.948 (`clicks / ctr`) |
+| `cpc` | KLK-0100, 0240, 0416 | 20,00 a 26,05 | 0,39 a 0,98 (`spend / clicks`) |
+| `spend` | KLK-0109, 0224, 0259 | 50.545 a 95.812 | 5,40 a 21.557 (`cpc × clicks`) |
+
+- Receita zero não indica performance ruim: as 41 campanhas com receita zero e conversões registradas são todas de awareness ou engagement, e 47 das 49 campanhas de Branding têm receita zero. A receita dessas campanhas não é medida.
+- Todos os vazios de `cpc` (20) e `revenue` (22) podem ser recalculados pelas outras colunas.
+
+Decisões:
+
+- Recuperar os valores das 10 campanhas pela própria conta, em vez de descartá-las ou marcá-las como faltantes. A regra fica em `src/limpeza.py` e é aplicada no pré-processamento, a qualquer base.
+- Registrar a coluna alterada em `coluna_corrigida`, para auditoria. Ela não entra no modelo.
+- Recalcular os vazios de `cpc` e `revenue` em vez de preenchê-los com a mediana.
+- Tratar o `roas` de campanhas sem receita medida como "não se aplica", e não como zero. A forma exata fica para a Parte 2.
+
+Por quê: o valor recuperado é exato, não uma estimativa, e descartar as 10 campanhas perderia 2,5% do treino sem necessidade. Manter os erros seria pior que descartar: são essas campanhas que criam a cauda absurda de impressões e gasto (14 milhões de impressões, gasto de 95 mil com 20 cliques), que distorceria qualquer média e o próprio modelo. Já `coluna_corrigida` não entra no modelo porque um erro de registro não diz nada sobre a qualidade do criativo; o valor dela é rastrear o que foi alterado.
+
+<details>
+<summary><b>Como a regra decide qual coluna está errada?</b></summary>
+
+Quando `ctr = clicks / impressions` não fecha, o erro pode estar em `impressions` ou no próprio `ctr`; quando `cpc = spend / clicks` não fecha, em `spend` ou no `cpc`. A regra compara as duas versões possíveis da taxa (a registrada e a recalculada) com a mediana da plataforma no treino, em escala log, mantém a mais plausível e recalcula a outra coluna. Ex: em KLK-0259, o `cpc` registrado (0,27) é plausível para o TikTok, e o recalculado (4.790) não; logo o erro está no `spend`.
+
+O `roas` não entra na regra e serve como validação independente: depois da correção, ele fecha nas 10 campanhas. Em KLK-0259, o gasto recuperado (5,40) reproduz exatamente o `roas` registrado (13,45). Quando só o `roas` não fecha, não há uma terceira conta para desempatar, e a campanha é apenas sinalizada; isso não ocorre no treino.
+
+A tolerância de 20% fica no meio do vão entre o arredondamento (até ~8%) e os erros (acima de 70%), então a regra não é sensível ao valor exato escolhido. As medianas de referência são calculadas apenas no treino.
+</details>
+
+<details>
+<summary><b>A correção muda as conclusões do passo 4.1?</b></summary>
+
+Não. Os testes de faltantes do 4.1 foram feitos com os dados brutos, que incluem os 10 erros. Repetidos com os valores corrigidos, as mesmas 4 comparações têm p < 0,05 e nenhuma sobrevive à correção de Holm. O padrão de `avg_watch_time_s` se mantém (medianas de impressões de 9.045 com vazio e 25.057 sem).
+</details>
+
+#### 4.4 Tetos e pisos
+
+O que vimos (no treino já corrigido no 4.3):
+
+- `ctr` truncado no topo em 0,15: 42 campanhas (10,5%) estão exatamente nesse valor, contra 24 entre 0,13 e 0,15, e nenhuma acima. Os cliques foram ajustados junto (`clicks / impressions` também dá 0,15), então o CTR real dessas campanhas é desconhecido; só se sabe que é de pelo menos 15%.
+- O teto do `ctr` não atinge campanhas ao acaso: as campanhas no teto têm `klike_score` mediano de 74,4, contra 59,3 nas demais (Mann-Whitney, p ≈ 2 × 10⁻⁷), e 74% delas usam hook, contra 49%.
+- `engagement_rate` truncado em 0,10: 7 campanhas, todas do TikTok (5% da plataforma), sem diferença de `klike_score` em relação às demais (p ≈ 0,9).
+- Pisos com efeito desprezível: `impressions` tem mínimo de exatamente 1.000 em 2 campanhas, cujo `ctr` indica 983 e 990; `video_duration_s` tem um leve acúmulo em 5 s (16 campanhas, contra 10 em 6 s), quase todas do TikTok.
+
+Decisões:
+
+- Manter os valores no teto e adicionar, no pré-processamento, as colunas indicadoras `ctr_no_teto` e `engagement_no_teto`.
+- As recomendações do engine não projetam CTR acima de 15%.
+- Pisos de `impressions` e `video_duration_s`: apenas registrados.
+
+Por quê: remover as campanhas no teto descartaria 10,5% do treino e, como o teto concentra as campanhas de maior `klike_score`, enviesaria o modelo para baixo. Um modelo para dados censurados resolveria o problema de forma mais completa, mas é desproporcional para 400 campanhas. A coluna indicadora informa ao modelo que o valor real é "pelo menos 0,15", e não exatamente 0,15. Para a análise, o teto tem uma consequência direta: ele achata a diferença entre as melhores campanhas, então a relação entre CTR e `klike_score` vai parecer mais fraca do que é. No engine, prever CTR acima de 15% seria extrapolar além do que os dados mostram.
