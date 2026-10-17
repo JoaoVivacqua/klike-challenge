@@ -1,10 +1,7 @@
-"""Regras de limpeza usadas na EDA e no pré-processamento."""
 import numpy as np
 import pandas as pd
 
-# O arredondamento (cliques inteiros, roas com 2 casas) gera no máximo ~8% de diferença; os erros de registro, mais de 70%.
 TOLERANCIA = 0.2
-
 
 def medianas_por_plataforma(df):
     """Medianas de ctr e cpc por plataforma. Calcular só no treino."""
@@ -22,13 +19,8 @@ def _mais_plausivel(candidato_a, candidato_b, referencia):
 
 
 def corrigir_inconsistencias(df, medianas):
-    """Corrige campanhas em que ctr = clicks / impressions ou cpc = spend / clicks não fecham.
-
-    Entre a taxa registrada e a recalculada, fica a mais próxima da mediana da plataforma,
-    e a outra coluna é recalculada. `coluna_corrigida` registra o que mudou.
-    """
     indice = df.index
-    df = df.reset_index(drop=True)  # as atribuições abaixo alinham pelo índice, que pode ter rótulos repetidos
+    df = df.reset_index(drop=True)
     df["coluna_corrigida"] = None
     ref_ctr = df["platform"].map(medianas["ctr"])
     ref_cpc = df["platform"].map(medianas["cpc"])
@@ -51,7 +43,6 @@ def corrigir_inconsistencias(df, medianas):
     df.loc[erro_spend, "coluna_corrigida"] = "spend"
     df.loc[erro_cpc, "coluna_corrigida"] = "cpc"
 
-    # sem uma terceira conta para desempatar, um roas que não fecha só é sinalizado
     roas_quebrado = _conta_quebrada(df["roas"], df["revenue"] / df["spend"]) & (df["revenue"] > 0)
     df.loc[roas_quebrado, "coluna_corrigida"] = "roas não fecha (não corrigido)"
     df.index = indice

@@ -1,16 +1,17 @@
 # Klike Data Science Challenge
 
-Análise de 500 campanhas de vídeo veiculadas em Meta, TikTok e LinkedIn: exploração dos dados e um modelo que prevê o `klike_score` (qualidade do criativo, de 0 a 100).
+Análise de 500 campanhas de vídeo veiculadas em Meta, TikTok e LinkedIn: exploração dos dados, um modelo que prevê o `klike_score` (qualidade do criativo, de 0 a 100) e um engine que sugere melhorias para cada campanha.
 
 ## Resumo
 
 - Antes de explorar, separei 20% dos dados para teste, que só serão usados na avaliação final do modelo.
 - 10 campanhas tinham erro de registro em uma coluna (ex: 14 milhões de impressões em vez de 72 mil); todas foram recuperadas pelas outras colunas.
 - O que mais pesa no `klike_score` é o criativo: texto em excesso na tela custa cerca de 19 pontos, e ter hook nos 3 primeiros segundos vale cerca de 18. Rosto humano, call-to-action e legenda vêm em seguida.
-- O que funciona no TikTok funciona no LinkedIn: o efeito de cada atributo no score é praticamente o mesmo nas três plataformas.
+- O que funciona no TikTok funciona no LinkedIn: o efeito de cada atributo no score é praticamente o mesmo nas três plataformas e nas cinco categorias de anunciante.
 - Hook e rosto aumentam CTR, engajamento e retenção. Conversão e ROAS dependem da audiência (retargeting), e não do criativo.
 - Duração do vídeo, proporção música/voz e formato não mostraram relação com o score.
 - Um modelo linear (Ridge) prevê o score com erro médio de 6,6 pontos usando só o criativo e o contexto da campanha (R² 0,68 no teste). Com as métricas de performance, o erro cai para 4,9 pontos (R² 0,83). Modelos de árvores não superaram o linear.
+- O engine de recomendações recebe uma campanha e devolve pelo menos 3 sugestões quantificadas e priorizadas (ex: "Adicionar um hook nos 3 primeiros segundos pode aumentar o klike_score em cerca de 17 pontos; no TikTok, campanhas assim têm CTR mediano 83% maior"). No teste, os ganhos estimados para hook e rosto se confirmaram em campanhas que o modelo nunca viu.
 
 Os notebooks contêm o código e os resultados. Este README explica as decisões.
 
@@ -26,6 +27,12 @@ pip install -r requirements.txt
 python -m notebook notebooks/
 ```
 
+Recomendações para uma campanha do dataset, pela linha de comando:
+
+```bash
+python -m src.engine KLK-0042
+```
+
 ## Estrutura
 
 ```
@@ -34,11 +41,13 @@ python -m notebook notebooks/
 ├── figures/                          # gráficos gerados pelos notebooks
 ├── notebooks/
 │   ├── 01_eda.ipynb                  # Parte 1: análise exploratória
-│   └── 02_modelo.ipynb               # Parte 2: modelo do klike_score
+│   ├── 02_modelo.ipynb               # Parte 2: modelo do klike_score
+│   └── 03_engine.ipynb               # Parte 3: engine de recomendações, exemplos e validação
 ├── src/
 │   ├── limpeza.py                    # correção de inconsistências, usada na EDA e no pré-processamento
 │   ├── preprocessamento.py           # limpeza, features novas e codificação (passos do pipeline)
-│   └── modelo.py                     # divisão treino/teste e os modelos finais
+│   ├── modelo.py                     # divisão treino/teste e os modelos finais
+│   └── engine.py                     # engine de recomendações (também roda pela linha de comando)
 ├── requirements.txt
 └── README.md
 ```
@@ -307,10 +316,11 @@ O que encontrei:
 - Nas métricas, os efeitos variam mais, mas com evidência fraca: rosto aumenta o CTR no TikTok e no LinkedIn (+66% e +64%), mas não no Meta (+3%), onde o ganho aparece no engajamento (+50%).
 - O formato só parece importar no LinkedIn, onde vídeos verticais têm score bem menor (42,6 contra 58,2 dos horizontais). Mas são só 9 campanhas, com bem menos hook (22% contra 54%) e rosto (33% contra 54%): a diferença vem da composição desses vídeos, e não do formato.
 - Duração e proporção música/voz também não têm efeito dentro de cada plataforma: nenhuma das 24 correlações com score, CTR, retenção e engajamento é significativa após a correção. No TikTok, vídeos acima de 30 s têm CTR mediano menor (2,7% contra 5,6%), mas são só 5 campanhas. Os dados não sustentam uma duração ideal por plataforma.
+- A categoria do anunciante também não muda o efeito dos atributos. Todos os efeitos no score são positivos nas cinco categorias, e o hook é significativo em todas. Os tamanhos variam mais que entre plataformas (ex: hook de +11,5 pontos no E-commerce a +22,9 no Lead Gen), mas com grupos de 49 a 137 campanhas, e incluir essas variações no modelo como interações não melhora o erro (Parte 2). Nas métricas, nenhuma das 60 comparações por categoria é significativa.
 - O LinkedIn tem score mediano 6 a 7 pontos abaixo das outras plataformas. Parte disso é composição (mais campanhas com texto alto), mas comparando campanhas com o mesmo hook, rosto e densidade de texto ainda restam 4 a 5 pontos de diferença.
 - Rosto aumenta o engajamento em todas as faixas etárias, com efeito menor no público 45+ (+15%, contra +45% a +61%).
 
-Conclusão: para o score, o que funciona no TikTok funciona no LinkedIn. A plataforma muda o nível de partida, e não o efeito de cada atributo. Por isso as recomendações podem usar efeitos comuns, ajustando o ponto de partida por plataforma.
+Conclusão: para o score, o que funciona no TikTok funciona no LinkedIn, e o que funciona no E-commerce funciona em SaaS. A plataforma muda o nível de partida, e não o efeito de cada atributo. Por isso as recomendações podem usar efeitos comuns, ajustando o ponto de partida por plataforma.
 
 ### 8. Registro dos achados
 
@@ -346,7 +356,7 @@ Decisão: treinar dois modelos, com conjuntos de features diferentes.
 | Pré-veiculação | atributos do criativo (hook, rosto, CTA, legenda, densidade de texto, formato, duração, música/voz) e contexto de mídia (plataforma, categoria, objetivo, público, retargeting) | antes de a campanha ir ao ar |
 | Pós-veiculação | o anterior mais as métricas de performance, como taxas: CTR, CPC, engajamento, retenção, conversão e ROAS | depois que a campanha roda |
 
-Por quê: as métricas de performance só existem depois da veiculação. O modelo pré-veiculação é o que permite simular mudanças no criativo de uma campanha nova. O pós-veiculação mede quanto do score é explicado pelo desempenho observado.
+Por quê: as métricas de performance só existem depois da veiculação. O modelo pré-veiculação é o que permite simular mudanças no criativo de uma campanha nova, e por isso é o usado no engine (Parte 3). O pós-veiculação mede quanto do score é explicado pelo desempenho observado.
 
 Features novas, todas motivadas pela EDA:
 
@@ -377,7 +387,7 @@ Por quê: o Ridge e o Gradient Boosting empatam nos dois conjuntos. Comparando f
 
 Duas checagens confirmam a escolha:
 
-- Interações atributo × plataforma não melhoram o Ridge (RMSE 8,81 contra 8,74), como previsto no passo 7.
+- Interações atributo × plataforma e atributo × categoria não melhoram o Ridge (RMSE 8,81 e 8,88, contra 8,74), como previsto no passo 7.
 - Com o `klike_score` embaralhado, o R² cai para abaixo de zero: o desempenho vem de relações reais, e não de vazamento.
 
 ### Resultado no teste
@@ -409,3 +419,61 @@ O teste foi usado uma única vez, com os modelos já escolhidos.
 - Plataforma, categoria, objetivo, formato, duração e música/voz quase não importam. O LinkedIn fica de 3,5 a 5,2 pontos abaixo das outras plataformas.
 
 Faz sentido do ponto de vista de negócio: o score mede a qualidade do criativo, e os atributos que mais pesam são os que prendem a atenção nos primeiros segundos, coerentes com o efeito deles no CTR e na retenção (passo 6). A importância é medida por permutação nas features já limpas, no teste, com os níveis de cada categoria embaralhados juntos.
+
+<details>
+<summary><b>Por que o engine usa o modelo pré-veiculação, se o pós-veiculação erra menos?</b></summary>
+
+O engine precisa responder "o que acontece com o score se eu mudar o criativo". No modelo pós-veiculação, mudar o hook manteria o CTR fixo, quando na prática o hook também aumenta o CTR (passo 6). O efeito do hook seria subestimado (+12,2 pontos no pós-veiculação, contra +17,1 no pré-veiculação), porque parte dele passa pelo CTR. Além disso, uma campanha que ainda não foi ao ar não tem métricas. O pós-veiculação serve para medir o quanto do score é explicado pelo desempenho real e para avaliar campanhas que já rodaram.
+</details>
+
+---
+
+## Parte 3 — Engine de recomendações
+
+Notebook: [`notebooks/03_engine.ipynb`](notebooks/03_engine.ipynb) · Código: [`src/engine.py`](src/engine.py)
+
+```python
+engine = EngineRecomendacoes().fit(X_train, y_train)
+engine.recomendar(campanha)  # campanha = uma linha do dataset (dict ou Series)
+```
+
+Exemplo real, uma campanha do teste (TikTok, E-commerce, público 18-24, score 30,2):
+
+1. Adicionar um hook nos 3 primeiros segundos: pode aumentar o klike_score em cerca de 17,1 pontos (previsão de 41 para 58; IC 95%: +15,5 a +18,8); no TikTok, campanhas assim têm CTR mediano 83% maior (o desta passaria de 2,2% para cerca de 4,0%); nas três plataformas juntas, a taxa de engajamento mediana é 56% maior.
+2. Incluir um rosto humano no vídeo: pode aumentar o klike_score em cerca de 11,2 pontos (previsão de 41 para 52; IC 95%: +9,1 a +12,6); nas três plataformas juntas, a taxa de engajamento mediana é 51% maior.
+3. Adicionar legendas: pode aumentar o klike_score em cerca de 7,7 pontos (previsão de 41 para 48; IC 95%: +6,2 a +9,4).
+4. Incluir um call-to-action: pode aumentar o klike_score em cerca de 7,2 pontos.
+5. O CTR desta campanha (2,2%) está abaixo da mediana das campanhas do TikTok (6,2%). Sugestão: testar em A/B variações da abertura e da primeira cena do vídeo. Chegar a esse nível elevaria o klike_score em cerca de 7,1 pontos.
+
+### Como funciona
+
+| Tipo | Quando aparece | Como é quantificada |
+|---|---|---|
+| Criativo | a campanha não tem hook, rosto, legenda ou CTA, ou não tem texto médio | ganho no score pelo modelo pré-veiculação, com IC 95% por bootstrap; efeito observado no CTR e no engajamento da plataforma |
+| Performance | CTR, retenção, engajamento, conversão ou ROAS abaixo da referência da plataforma | ganho no score de chegar à referência, pelo modelo pós-veiculação |
+| Mídia | campanha de prospecção com objetivo de conversão, tráfego ou instalação | aumento de conversão e ROAS observado com retargeting |
+
+O ganho no score é uma simulação. O modelo prevê o score da campanha como ela é e o de uma cópia em que só a recomendação foi aplicada (ex: com hook); a diferença é o ganho. Nas recomendações de criativo, a simulação usa o modelo pré-veiculação. Como ele é linear, o ganho é o coeficiente do atributo, igual para qualquer campanha, e o IC 95% vem de 200 reamostragens do treino com o modelo reajustado em cada uma. Nas de performance, usa o modelo pós-veiculação, com a métrica levada até a referência da plataforma. Por isso os scores citados ("previsão de 41 para 58") são previsões do modelo, e não o score real da campanha.
+
+Decisões:
+
+- Priorização pelo ganho estimado no score; mídia por último, porque não muda o score (que avalia o criativo), apenas o retorno. O score é a medida de impacto por ser a única comum a todas as recomendações: CTA e legenda, por exemplo, elevam o score sem efeito detectável no CTR (passo 6). Os efeitos nas métricas aparecem no texto de cada recomendação.
+- Contexto: os efeitos nas métricas são calculados na plataforma da campanha, e o de rosto no engajamento, na faixa etária. Os efeitos passam pelo mesmo critério da EDA: Mann-Whitney com correção de Holm sobre todas as comparações que o engine pode citar. Se o efeito não for significativo no grupo da campanha, ou o grupo tiver menos de 15 campanhas, o engine usa todas as campanhas juntas, e diz isso no texto. Se nem assim houver evidência, o efeito não é citado. A categoria do anunciante não muda o efeito dos atributos (passo 7), então não altera as recomendações.
+- Referência de performance: a mediana da plataforma; para quem já está acima dela, o quartil superior e depois o nível dos 10% melhores. Recomendações de performance com ganho abaixo de 0,5 ponto só entram se faltarem recomendações.
+- O CTR projetado nunca passa de 15%, o teto observado nos dados (passo 4.4).
+- Campanhas que já têm quase tudo recebem também o que manter, com quanto cada atributo sustenta do score. Assim todas as 500 campanhas recebem pelo menos 3 recomendações.
+- Duração e música/voz não geram recomendações: os dados não mostraram efeito delas, nem no geral nem dentro de cada plataforma (passos 6 e 7), e recomendá-las seria inventar um padrão.
+
+Por quê: o enunciado pede recomendações acionáveis, quantificadas, contextuais e priorizadas. O modelo pré-veiculação quantifica o que muda no criativo; as métricas por plataforma dão o contexto; e o modelo pós-veiculação quantifica o que fazer quando o criativo já tem os atributos certos, mas a execução ainda não entrega.
+
+### Validação
+
+- Cobertura: todas as campanhas do teste recebem pelo menos 3 recomendações (mediana de 6).
+- Os ganhos estimados no treino se confirmam em campanhas que o modelo nunca viu: no teste, a diferença observada de score é de 16,2 pontos para hook (estimado: 17,1) e 14,0 para rosto (estimado: 11,2). Legenda, CTA e texto médio têm o mesmo sinal, mas variam mais, com grupos de 22 a 68 campanhas.
+- Para metade das campanhas do teste, a primeira recomendação vale 16 pontos ou mais.
+
+### Limitações
+
+- Os efeitos vêm de dados observacionais: o dataset mostra que campanhas com hook têm score maior, mas não prova que adicionar um hook causa o aumento. A confirmação seria um teste A/B.
+- Os ganhos são estimados um a um e não devem ser somados: adicionar um hook também aumenta o CTR, que tem sua própria recomendação.
+- As sugestões de ação das recomendações de performance (ex: testar outra abertura) são hipóteses de marketing; o que vem dos dados é quanto vale melhorar a métrica.

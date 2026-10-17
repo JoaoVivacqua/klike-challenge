@@ -1,4 +1,3 @@
-"""Dados, divisão treino/teste e os dois modelos finais."""
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +10,7 @@ from src.preprocessamento import LimpezaCampanhas, codificador_pos_veiculacao, c
 
 CAMINHO_DADOS = Path(__file__).resolve().parents[1] / "data" / "klike_challenge_dataset.csv"
 ALVO = "klike_score"
-ALPHA = 3.16  # escolhido na validação cruzada, igual nos dois modelos (notebooks/02_modelo.ipynb)
+ALPHA = 3.16  # escolhido na validação cruzada
 
 
 def carregar_treino_teste():

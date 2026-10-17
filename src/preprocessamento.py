@@ -1,4 +1,3 @@
-"""Pré-processamento das campanhas: limpeza, novas features e codificação para o modelo."""
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
@@ -11,7 +10,7 @@ from src.limpeza import corrigir_inconsistencias, medianas_por_plataforma
 TETO_CTR = 0.15
 TETO_ENGAGEMENT = 0.10
 
-# Existem antes de a campanha ir ao ar: decisões de produção do vídeo e de mídia
+# Existem antes de a campanha ir ao ar
 CRIATIVO_BINARIAS = ["has_hook", "has_face", "has_cta", "has_subtitle"]
 CRIATIVO_NUMERICAS = ["video_duration_s", "music_voice_ratio"]
 CRIATIVO_CATEGORICAS = ["format", "text_density"]
@@ -40,7 +39,7 @@ class LimpezaCampanhas(BaseEstimator, TransformerMixin):
         for col in ["has_hook", "has_face", "has_cta", "is_retargeting"]:
             df[col] = df[col].astype(float)
 
-        # vazios recuperáveis pela própria conta (passo 4.3)
+        # vazios recuperáveis pela própria conta
         cliques = df["clicks"].replace(0, np.nan)
         df["cpc"] = df["cpc"].fillna(df["spend"] / cliques)
         df["revenue"] = df["revenue"].fillna(df["roas"] * df["spend"])
@@ -50,12 +49,12 @@ class LimpezaCampanhas(BaseEstimator, TransformerMixin):
         df["ctr_no_teto"] = (df["ctr"] >= TETO_CTR).astype(float)
         df["engagement_no_teto"] = (df["engagement_rate"] >= TETO_ENGAGEMENT).astype(float)
 
-        # receita não medida (passo 4.3): roas zero com conversões não é retorno zero
+        # receita não medida (passo 4.3)
         nao_medida = (df["roas"] == 0) & (df["conversions"] > 0)
         df["roas_nao_se_aplica"] = nao_medida.astype(float)
         df.loc[nao_medida, "roas"] = np.nan
 
-        # taxas com cauda à direita: log, com as proporções em pontos percentuais
+        # taxas com cauda à direita: log
         for col in ["ctr", "engagement_rate", "conversion_rate"]:
             df[f"log_{col}"] = np.log1p(df[col] * 100)
         for col in ["cpc", "roas"]:
