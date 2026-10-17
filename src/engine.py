@@ -40,6 +40,11 @@ def _taxa_para_log(valor):
     return np.log1p(valor * 100)
 
 
+def _juntar(acao, detalhes):
+    """Ação seguida dos detalhes, em frases separadas."""
+    return f"{acao}: {detalhes[0]}" + "".join(f". {d[0].upper()}{d[1:]}" for d in detalhes[1:]) + "."
+
+
 def _holm(p):
     ordem = np.argsort(p)
     ajustado = np.empty(len(p))
@@ -102,6 +107,12 @@ class EngineRecomendacoes:
             return self.efeitos_[coluna, valor, referencia, metrica, nivel], onde
         return self.efeitos_.get((coluna, valor, referencia, metrica, None)), "nas três plataformas juntas"
 
+    @staticmethod
+    def _texto_ganho(score_atual, ganho, inferior, superior):
+        return (f"pode aumentar o klike_score em cerca de {_formatar_numero(ganho)} pontos (previsão de "
+                f"{_formatar_numero(score_atual, 0)} para {_formatar_numero(score_atual + ganho, 0)}, IC 95%: "
+                f"{_formatar_numero(inferior, sinal=True)} a {_formatar_numero(superior, sinal=True)})")
+
     def _ganhos_score(self, original, alteradas):
         Z = self.modelo_pre_[:-1].transform(pd.concat([original] + alteradas, ignore_index=True))
         previsto = self.modelo_pre_[-1].predict(Z)
@@ -125,8 +136,7 @@ class EngineRecomendacoes:
             if ganho <= 0:
                 continue
             referencia = campanha[coluna] if coluna == "text_density" else 0.0
-            detalhes = [f"pode aumentar o klike_score em cerca de {_formatar_numero(ganho)} pontos (previsão de {_formatar_numero(score_atual, 0)} "
-                        f"para {_formatar_numero(score_atual + ganho, 0)}; IC 95%: {_formatar_numero(inferior, sinal=True)} a {_formatar_numero(superior, sinal=True)})"]
+            detalhes = [self._texto_ganho(score_atual, ganho, inferior, superior)]
 
             efeito_ctr, onde = self._efeito_contextual(campanha, coluna, valor, referencia, "ctr")
             if efeito_ctr is not None and efeito_ctr > 0.05 and pd.notna(campanha["ctr"]):
@@ -139,8 +149,7 @@ class EngineRecomendacoes:
             efeito_eng, onde = self._efeito_contextual(campanha, coluna, valor, referencia, "engagement_rate", contexto)
             if efeito_eng is not None and efeito_eng > 0.05:
                 detalhes.append(f"{onde}, a taxa de engajamento mediana é {_formatar_pct(efeito_eng, 0)} maior")
-            recomendacoes.append({"tipo": "criativo", "ganho_score": ganho,
-                                  "recomendacao": f"{acao}: " + "; ".join(detalhes) + "."})
+            recomendacoes.append({"tipo": "criativo", "ganho_score": ganho, "recomendacao": _juntar(acao, detalhes)})
         return recomendacoes
 
     def _recomendacoes_performance(self, limpa):
@@ -169,20 +178,23 @@ class EngineRecomendacoes:
                 f"klike_score em cerca de {_formatar_numero(ganho)} pontos.")})
         return recomendacoes
 
-    def _recomendacoes_midia(self, limpa):
+    def _recomendacoes_midia(self, original, limpa):
         campanha = limpa.iloc[0]
         if campanha["is_retargeting"] == 1 or campanha["objective"] not in OBJETIVOS_DE_RESPOSTA:
             return []
+        score_atual, (ganho,), ((inferior, superior),) = self._ganhos_score(original, [original.assign(is_retargeting=True)])
+        if ganho <= 0:
+            return []
+        detalhes = [self._texto_ganho(score_atual, ganho, inferior, superior)]
         conversao, onde = self._efeito_contextual(campanha, "is_retargeting", 1.0, 0.0, "conversion_rate")
         roas, _ = self._efeito_contextual(campanha, "is_retargeting", 1.0, 0.0, "roas")
-        if conversao is None:
-            return []
-        texto = (f"Direcionar parte do orçamento para retargeting: {onde}, campanhas de retargeting têm taxa de "
-                 f"conversão mediana {_formatar_pct(conversao, 0)} maior")
-        if roas is not None and campanha["roas_nao_se_aplica"] == 0:
-            texto += f" e ROAS {_formatar_pct(roas, 0)} maior"
-        texto += ". Não altera o klike_score, que avalia o criativo, mas melhora o retorno da campanha."
-        return [{"tipo": "mídia", "ganho_score": 0.0, "recomendacao": texto}]
+        if conversao is not None:
+            efeito = f"{onde}, campanhas de retargeting têm taxa de conversão mediana {_formatar_pct(conversao, 0)} maior"
+            if roas is not None and campanha["roas_nao_se_aplica"] == 0:
+                efeito += f" e ROAS {_formatar_pct(roas, 0)} maior"
+            detalhes.append(efeito)
+        return [{"tipo": "mídia", "ganho_score": ganho,
+                 "recomendacao": _juntar("Direcionar parte do orçamento para retargeting", detalhes)}]
 
     def _recomendacao_manter(self, original, limpa):
         campanha = limpa.iloc[0]
@@ -201,9 +213,9 @@ class EngineRecomendacoes:
         original = pd.DataFrame([dict(campanha)]).drop(columns=[ALVO], errors="ignore")
         limpa = self.modelo_pre_[0].transform(original)
         performance = self._recomendacoes_performance(limpa)
-        principais = self._recomendacoes_criativo(original, limpa) + [r for r in performance if r["ganho_score"] >= MIN_GANHO]
+        principais = (self._recomendacoes_criativo(original, limpa) + self._recomendacoes_midia(original, limpa)
+                      + [r for r in performance if r["ganho_score"] >= MIN_GANHO])
         recomendacoes = sorted(principais, key=lambda r: -r["ganho_score"])
-        recomendacoes += self._recomendacoes_midia(limpa)
         
         # para campanhas já fortes completamos com ganhos menores e com o que manter
         if len(recomendacoes) < 3:

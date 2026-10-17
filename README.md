@@ -2,22 +2,24 @@
 
 Análise de 500 campanhas de vídeo veiculadas em Meta, TikTok e LinkedIn: exploração dos dados, um modelo que prevê o `klike_score` (qualidade do criativo, de 0 a 100) e um engine que sugere melhorias para cada campanha.
 
+Abordei o desafio como faria num projeto real: primeiro entender e limpar os dados sem olhar o teste, depois medir o que de fato move o score, e só então construir o modelo e o engine em cima disso. O que mais me chamou atenção é que o score é fácil de explicar: poucos atributos do criativo, com efeitos que se somam e valem igual em qualquer plataforma. Isso guiou as escolhas seguintes, de um modelo linear simples a um engine que recomenda o que falta na campanha e diz quanto vale.
+
 ## Resumo
 
-- Antes de explorar, separei 20% dos dados para teste, que só serão usados na avaliação final do modelo.
-- 10 campanhas tinham erro de registro em uma coluna (ex: 14 milhões de impressões em vez de 72 mil); todas foram recuperadas pelas outras colunas.
-- O que mais pesa no `klike_score` é o criativo: texto em excesso na tela custa cerca de 19 pontos, e ter hook nos 3 primeiros segundos vale cerca de 18. Rosto humano, call-to-action e legenda vêm em seguida.
+- Antes de explorar, separei 20% dos dados para teste, usados só na avaliação final do modelo.
+- 10 campanhas tinham erro de registro em uma coluna (ex: 14 milhões de impressões em vez de 72 mil), e todas foram recuperadas pelas outras colunas.
+- O que mais pesa no `klike_score` é o criativo: ter hook nos 3 primeiros segundos vale cerca de 17 pontos, e trocar texto em excesso na tela por uma quantidade média, cerca de 15. Rosto humano, legenda e call-to-action vêm em seguida.
 - O que funciona no TikTok funciona no LinkedIn: o efeito de cada atributo no score é praticamente o mesmo nas três plataformas e nas cinco categorias de anunciante.
 - Hook e rosto aumentam CTR, engajamento e retenção. Conversão e ROAS dependem da audiência (retargeting), e não do criativo.
 - Duração do vídeo, proporção música/voz e formato não mostraram relação com o score.
-- Um modelo linear (Ridge) prevê o score com erro médio de 6,6 pontos usando só o criativo e o contexto da campanha (R² 0,68 no teste). Com as métricas de performance, o erro cai para 4,9 pontos (R² 0,83). Modelos de árvores não superaram o linear.
-- O engine de recomendações recebe uma campanha e devolve pelo menos 3 sugestões quantificadas e priorizadas (ex: "Adicionar um hook nos 3 primeiros segundos pode aumentar o klike_score em cerca de 17 pontos; no TikTok, campanhas assim têm CTR mediano 83% maior"). No teste, os ganhos estimados para hook e rosto se confirmaram em campanhas que o modelo nunca viu.
+- Um modelo linear (Ridge) prevê o score com erro médio de 6,6 pontos usando só o criativo e o contexto da campanha (R² 0,68 no teste), e erra no máximo 10 pontos em 3 de cada 4 campanhas. Com as métricas de performance, o erro cai para 4,9 pontos (R² 0,83). Modelos de árvores não superaram o linear.
+- O engine de recomendações recebe uma campanha e devolve pelo menos 3 sugestões quantificadas e priorizadas (ex: "Adicionar um hook nos 3 primeiros segundos pode aumentar o klike_score em cerca de 17 pontos. No TikTok, campanhas assim têm CTR mediano 83% maior"). No teste, os ganhos estimados para hook e rosto se confirmaram em campanhas que o modelo nunca viu.
 
 Os notebooks contêm o código e os resultados. Este README explica as decisões.
 
 ## Como rodar
 
-Requer Python 3.10 ou superior.
+Testado com Python 3.11.
 
 ```bash
 python -m venv .venv
@@ -30,7 +32,7 @@ python -m notebook notebooks/
 Recomendações para uma campanha do dataset, pela linha de comando:
 
 ```bash
-python -m src.engine KLK-0042
+python -m src.engine KLK-0164
 ```
 
 ## Estrutura
@@ -49,7 +51,8 @@ python -m src.engine KLK-0042
 │   ├── modelo.py                     # divisão treino/teste e os modelos finais
 │   └── engine.py                     # engine de recomendações (também roda pela linha de comando)
 ├── requirements.txt
-└── README.md
+├── README.md
+└── VISAO_DE_PRODUTO.md                # Parte 4: visão de produto
 ```
 
 ---
@@ -76,6 +79,12 @@ Cada passo depende do anterior, não adianta medir a correlação entre duas var
 
 </details>
 
+Para um time de marketing, eu apresentaria três visualizações:
+
+- Figura 04 (passo 6): quanto cada atributo do criativo vale no score. Hook e menos texto na tela são as maiores alavancas.
+- Figura 05 (passo 6): o que cada atributo muda nas métricas. Hook e rosto aumentam CTR e engajamento, e conversão e ROAS dependem de retargeting, não do criativo.
+- Figura 06 (passo 7): o efeito de cada atributo é o mesmo no Meta, no TikTok e no LinkedIn, então a mesma receita vale para as três.
+
 ### 1. Contexto
 
 Cada linha é uma campanha: um vídeo veiculado em uma plataforma, com seus atributos e métricas de performance. O alvo é o `klike_score`. As 26 colunas se dividem em quatro grupos:
@@ -91,9 +100,11 @@ A pergunta central da EDA ("quais atributos do criativo se correlacionam com boa
 
 ### 2. Divisão treino/teste antes de explorar
 
-Decisão: separar 20% das campanhas (100) como teste antes de qualquer análise, com `random_state=42` e estratificação por plataforma.
+Decisão: separar 20% das campanhas (100) como teste antes de qualquer análise, com `random_state=42` e estratificação por plataforma. Toda a análise usa apenas o treino (400 campanhas).
 
-Por quê: o teste simula campanhas novas. Se ele influenciar as decisões da análise, ocorre um vazamento de dados: as escolhas ficam ajustadas ao próprio teste (um tipo de overfitting), e a nota final do modelo fica otimista demais.
+Por quê: o teste simula campanhas novas. Se eu explorasse os 500 registros antes de dividir, o teste influenciaria as decisões mesmo sem querer (a mediana usada para preencher faltantes, as features escolhidas, os outliers removidos), e a nota final do modelo ficaria otimista. É o que se chama de *data snooping*: um vazamento de dados que leva a overfitting ao próprio teste.
+
+A estratificação sorteia 20% dentro de cada plataforma, para que os dois conjuntos tenham a mesma composição. Isso importa porque o LinkedIn tem só 83 campanhas, e um sorteio simples poderia deixar o teste com bem menos que as 17 esperadas. Estratificar não causa vazamento: só controla quantas campanhas de cada plataforma vão para cada lado, sem usar nenhum atributo nem o `klike_score` do teste. O 80/20 equilibra dados para aprender e uma avaliação de tamanho razoável, e o `random_state` fixo torna a divisão reproduzível.
 
 | Plataforma | Base | Treino | Teste |
 |---|---|---|---|
@@ -101,58 +112,15 @@ Por quê: o teste simula campanhas novas. Se ele influenciar as decisões da an�
 | TikTok | 35,2% | 35,2% | 35,0% |
 | LinkedIn | 16,6% | 16,5% | 17,0% |
 
-<details>
-<summary><b>Por que dividir antes de explorar?</b></summary>
-
-O conjunto de teste existe para medir como o modelo se sairia com campanhas que nunca viu. Se eu explorasse os 500 registros antes de dividir, o teste influenciaria minhas decisões mesmo sem querer:
-
-- a mediana usada para preencher valores faltantes incluiria as campanhas de teste;
-- as features seriam escolhidas olhando também para o teste;
-- os outliers a remover seriam decididos vendo como aparecem no teste.
-
-O teste deixaria de ser "novo": as decisões ficariam ajustadas a ele, um tipo de overfitting ao conjunto de teste, e a nota final seria otimista. Esse cuidado é conhecido como evitar *data snooping*. Por isso, toda a análise usa apenas o treino (400 campanhas).
-
-</details>
-
-<details>
-<summary><b>Por que estratificar por plataforma?</b></summary>
-
-Num sorteio simples, cada campanha tem a mesma chance de cair no teste, sem olhar a plataforma. O LinkedIn tem só 83 campanhas (17% da base), então o teste deveria receber cerca de 17, mas por acaso poderia receber bem menos ou bem mais. Numa base pequena, isso deixaria a avaliação por plataforma instável. Na divisão estratificada, o sorteio é feito dentro de cada plataforma (20% de cada uma), e os dois conjuntos ficam com a mesma composição da base, como mostra a tabela acima.
-
-A plataforma foi escolhida sem olhar os dados: o enunciado destaca que "o que funciona no TikTok pode não funcionar no LinkedIn", e o engine de recomendações precisa considerar a plataforma.
-
-Estratificar não causa vazamento de dados, ele só acontece quando informação do conteúdo do teste chega ao treino, como nos exemplos da seção anterior. A estratificação só controla quantas campanhas de cada plataforma vão para cada lado; nenhum atributo nem `klike_score` das campanhas de teste é usado. A proporção de plataformas no treino seria praticamente a mesma com um sorteio simples. A estratificação só remove a variação causada pelo acaso.
-
-</details>
-
-<details>
-<summary><b>Por que 80/20 e random_state=42?</b></summary>
-
-- 80/20 é um equilíbrio usual entre ter dados suficientes para aprender (400 campanhas) e uma avaliação de tamanho razoável (100).
-- `random_state=42` fixa o sorteio, para que qualquer pessoa que rode o notebook obtenha exatamente a mesma divisão. O valor em si é arbitrário.
-
-</details>
-
 ### 3. Formato e tipos
 
-O que encontrei: a maioria das colunas foi lida com o tipo certo, e as categorias batem com o dicionário de dados, sem variações de escrita. Três colunas precisam de ajuste:
+O que encontrei: a maioria das colunas foi lida com o tipo certo, e as categorias batem com o dicionário de dados, sem variações de escrita (ex: "meta" em vez de "Meta"). Três colunas precisam de ajuste:
 
 - `date` foi lida como texto, não como data.
 - `has_subtitle` foi lida como `object` (True/False misturados com 36 vazios no treino), e não como booleano.
 - `text_density` (low < medium < high) e `target_audience_age` (18-24 < 25-34 < 35-44 < 45+) têm ordem natural, mas foram lidas como texto sem ordem.
 
-Decisão: corrigir esses tipos no pré-processamento, e não durante a análise.
-
-Por quê: assim a mesma correção vale automaticamente para qualquer base nova (ex: uma campanha que o engine de recomendações vai avaliar), em vez de ficar presa a este notebook.
-
-<details>
-<summary><b>Como as categorias foram verificadas? E se surgirem novas plataformas no futuro?</b></summary>
-
-O notebook compara as categorias encontradas no treino com as definidas no dicionário de dados do desafio (ex: as 3 plataformas, os 5 objetivos). Essa verificação pega erros de escrita, como "meta" em vez de "Meta", que fariam a mesma plataforma ser tratada como duas diferentes. No treino, todas as colunas bateram com o dicionário.
-
-Uma categoria nova (ex: uma campanha do YouTube) não é tratada como erro: ela é apenas sinalizada como "fora do dicionário". Novas plataformas e categorias são esperadas conforme o produto cresce, e o aviso existe porque o modelo não terá aprendido nada sobre elas, então as previsões para esses casos seriam pouco confiáveis. Pelo mesmo motivo, o pré-processamento será construído para aceitar categorias novas sem quebrar.
-
-</details>
+Decisão: corrigir esses tipos no pré-processamento, e não durante a análise, para que a mesma correção valha para qualquer campanha nova que o engine avaliar. Pelo mesmo motivo, uma categoria fora do dicionário (ex: uma campanha do YouTube) não é tratada como erro, e sim sinalizada: novas plataformas são esperadas conforme o produto cresce, e o pré-processamento as aceita sem quebrar, mas as previsões para elas são pouco confiáveis, porque o modelo não aprendeu nada sobre elas.
 
 ### 4. Integridade
 
@@ -163,30 +131,12 @@ O que encontrei:
 - 7 colunas têm vazios, entre 5% e 9% cada: `video_duration_s`, `has_subtitle`, `music_voice_ratio`, `cpc`, `revenue`, `avg_watch_time_s` e `engagement_rate`.
 - 62,5% das campanhas estão completas, e quase todas as outras têm um único campo vazio.
 - As taxas de vazios são parecidas entre Meta, TikTok e LinkedIn.
-- Comparando as campanhas com e sem vazio em cada uma das outras variáveis, nenhuma diferença continua significativa após corrigir para comparações múltiplas: não há evidência contra MCAR.
-- A exceção provável é `avg_watch_time_s`: metade dos seus vazios (11 de 22) está nos 20% de campanhas com menos impressões, o que indica MAR. Uma explicação plausível é que, com poucas visualizações, a plataforma não reporta o tempo médio assistido.
+- Comparando as campanhas com e sem vazio em cada uma das outras variáveis (qui-quadrado nas categóricas e Mann-Whitney nas numéricas, 117 comparações corrigidas pelo método de Holm), nenhuma diferença é significativa: não há evidência contra MCAR. O teste só distingue MCAR de MAR. MNAR não pode ser verificado sem o valor ausente.
+- A exceção provável é `avg_watch_time_s`: metade dos seus vazios (11 de 22) está nos 20% de campanhas com menos impressões, e as campanhas com vazio têm medianas de impressões e gasto cerca de três vezes menores. Isso indica MAR: com poucas visualizações, a plataforma provavelmente não reporta o tempo médio assistido. MNAR também é plausível, se tempos muito baixos simplesmente não forem registrados. Como o padrão não sobrevive à correção de Holm, fica como hipótese provável, e não como certeza.
 
 Decisão: o tratamento dos vazios fica para o pré-processamento (Parte 2), e não para a análise.
 
-Por quê: pelo mesmo motivo das correções de tipo, o tratamento precisa valer para qualquer base nova. O diagnóstico daqui orienta a escolha: para vazios ao acaso, preencher com um valor típico (ex: a mediana) é razoável; para `avg_watch_time_s`, o preenchimento deve considerar o tamanho da campanha, já que os vazios se concentram nas pequenas. Os vazios de `cpc` e `revenue` não precisam de estimativa: o passo 4.3 mostra que todos podem ser recalculados por `spend / clicks` e `roas × spend`.
-
-<details>
-<summary><b>Como foi testado o mecanismo dos faltantes?</b></summary>
-
-Para cada coluna com vazios, comparei as campanhas com e sem o vazio nas demais variáveis: qui-quadrado nas categóricas e Mann-Whitney nas numéricas. Usei Mann-Whitney em vez de comparar médias porque impressões, gasto e ROAS têm cauda longa (mesmo depois de corrigir os erros de registro do passo 4.3, a maior campanha tem cerca de 67 vezes as impressões da mediana), e uma única campanha extrema dominaria a média de um grupo.
-
-Foram 117 comparações, então os p-valores foram corrigidos pelo método de Holm. Sem a correção, 4 comparações têm p < 0,05, menos que as cerca de 6 esperadas só por acaso; com a correção, nenhuma é significativa.
-
-O teste só distingue MCAR de MAR. MNAR não pode ser verificado sem o valor ausente.
-
-</details>
-
-<details>
-<summary><b>Por que avg_watch_time_s é tratado como exceção, se não passou na correção?</b></summary>
-
-A correção de Holm controla os falsos positivos de uma busca ampla, mas também reduz o poder de detectar efeitos reais com poucos casos (22 vazios). Três evidências se somam: os menores p-valores da busca (0,002 para impressões e 0,003 para gasto), medianas de impressões e gasto cerca de três vezes menores nas campanhas com vazio e uma concentração nítida na faixa das menores campanhas. Existe também um mecanismo plausível. Como o padrão foi encontrado depois de procurar, ele é tratado como hipótese provável de MAR, e não como certeza. MNAR também é plausível, se um tempo assistido muito baixo simplesmente não for registrado. Nos dois casos, uma coluna indicadora de falta preservaria essa informação para o modelo.
-
-</details>
+Por quê: pelo mesmo motivo das correções de tipo, o tratamento precisa valer para qualquer base nova. O diagnóstico daqui orienta a escolha: para vazios ao acaso, preencher com um valor típico (ex: a mediana) é razoável. Para `avg_watch_time_s`, uma coluna indicadora de falta preserva a informação de que os vazios se concentram nas campanhas pequenas. Os vazios de `cpc` e `revenue` não precisam de estimativa: o passo 4.3 mostra que todos podem ser recalculados por `spend / clicks` e `roas × spend`.
 
 #### 4.2 Duplicatas
 
@@ -215,37 +165,28 @@ O que encontrei:
 
 Decisões:
 
-- Recuperar os valores das 10 campanhas pela própria conta, em vez de descartá-las ou marcá-las como faltantes. A regra fica em `src/limpeza.py` e é aplicada no pré-processamento, a qualquer base.
-- Registrar a coluna alterada em `coluna_corrigida`, para auditoria. Ela não entra no modelo.
+- Recuperar os valores das 10 campanhas pela própria conta, em vez de descartá-las ou marcá-las como faltantes. A regra fica em `src/limpeza.py` e é aplicada no pré-processamento, a qualquer base, e a coluna alterada fica registrada em `coluna_corrigida`, só para auditoria.
 - Recalcular os vazios de `cpc` e `revenue` em vez de preenchê-los com a mediana.
-- Tratar o `roas` de campanhas sem receita medida como "não se aplica", e não como zero. A forma exata fica para a Parte 2.
+- Tratar o `roas` de campanhas sem receita medida como "não se aplica", e não como zero.
 
-Por quê: o valor recuperado é exato, não uma estimativa, e descartar as 10 campanhas perderia 2,5% do treino sem necessidade. Manter os erros seria pior que descartar: são essas campanhas que criam a cauda absurda de impressões e gasto (14 milhões de impressões, gasto de 95 mil com 20 cliques), que distorceria qualquer média e o próprio modelo. Já `coluna_corrigida` não entra no modelo porque um erro de registro não diz nada sobre a qualidade do criativo; o valor dela é rastrear o que foi alterado.
+Por quê: o valor recuperado é exato, e descartar as 10 campanhas perderia 2,5% do treino sem necessidade. Manter os erros seria pior que descartar: são essas campanhas que criam a cauda absurda de impressões e gasto (14 milhões de impressões, gasto de 95 mil com 20 cliques), que distorceria qualquer média e o próprio modelo.
 
 <details>
 <summary><b>Como a regra decide qual coluna está errada?</b></summary>
 
-Quando `ctr = clicks / impressions` não fecha, o erro pode estar em `impressions` ou no próprio `ctr`; quando `cpc = spend / clicks` não fecha, em `spend` ou no `cpc`. A regra compara as duas versões possíveis da taxa (a registrada e a recalculada) com a mediana da plataforma no treino, em escala log, mantém a mais plausível e recalcula a outra coluna. Ex: em KLK-0259, o `cpc` registrado (0,27) é plausível para o TikTok, e o recalculado (4.790) não; logo o erro está no `spend`.
+Quando `ctr = clicks / impressions` não fecha, o erro pode estar em `impressions` ou no próprio `ctr`. Quando `cpc = spend / clicks` não fecha, em `spend` ou no `cpc`. A regra compara a taxa registrada e a recalculada com a mediana da plataforma no treino, em escala log, mantém a mais plausível e recalcula a outra coluna. Ex: em KLK-0259, o `cpc` registrado (0,27) é plausível para o TikTok, e o recalculado (4.790) não. Logo o erro está no `spend`.
 
-A escolha é confirmada por informações que a regra não usa. Nas correções de `cpc` e `spend`, o `roas` fecha com o valor escolhido e não fecharia com a alternativa: em KLK-0259, o gasto recuperado (5,40) reproduz exatamente o `roas` registrado (13,45); em KLK-0240, se o erro estivesse no gasto, o `roas` seria 0,17, e não os 4,31 registrados. KLK-0224 não tem receita, mas a alternativa daria um `cpc` de 4,81, 3,5 vezes o maior do Meta. Nas correções de `impressions`, a alternativa daria CTRs de 10 a 100 vezes menores que o mínimo da plataforma. Quando só o `roas` não fecha, não há uma terceira conta para desempatar, e a campanha é apenas sinalizada; isso não ocorre no treino.
-
-A tolerância de 20% fica no meio do vão entre o arredondamento (até ~8%) e os erros (acima de 70%), então a regra não é sensível ao valor exato escolhido. As medianas de referência são calculadas apenas no treino.
-</details>
-
-<details>
-<summary><b>A correção muda as conclusões do passo 4.1?</b></summary>
-
-Não. Os testes de faltantes do 4.1 foram feitos com os dados brutos, que incluem os 10 erros. Repetidos com os valores corrigidos, as mesmas 4 comparações têm p < 0,05 e nenhuma sobrevive à correção de Holm. O padrão de `avg_watch_time_s` se mantém (medianas de impressões de 9.045 com vazio e 25.057 sem).
+A escolha é confirmada por informações que a regra não usa. Nas correções de `cpc` e `spend`, o `roas` fecha com o valor escolhido e não fecharia com a alternativa: em KLK-0259, o gasto recuperado (5,40) reproduz exatamente o `roas` registrado (13,45). Nas correções de `impressions`, a alternativa daria CTRs de 10 a 100 vezes menores que o mínimo da plataforma. A tolerância de 20% fica no meio do vão entre o arredondamento (até ~8%) e os erros (acima de 70%), então a regra não depende do valor exato escolhido.
 </details>
 
 #### 4.4 Tetos e pisos
 
 O que encontrei (no treino já corrigido no 4.3):
 
-- `ctr` truncado no topo em 0,15: 42 campanhas (10,5%) estão exatamente nesse valor, contra 24 entre 0,13 e 0,15, e nenhuma acima. Os cliques foram ajustados junto (`clicks / impressions` também dá 0,15), então o CTR real dessas campanhas é desconhecido; só se sabe que é de pelo menos 15%.
-- O teto do `ctr` não atinge campanhas ao acaso: as campanhas no teto têm `klike_score` mediano de 74,4, contra 59,3 nas demais (Mann-Whitney, p ≈ 2 × 10⁻⁷), e 74% delas usam hook, contra 49%.
+- `ctr` truncado no topo em 0,15: 42 campanhas (10,5%) estão exatamente nesse valor, contra 24 entre 0,13 e 0,15, e nenhuma acima. Os cliques foram ajustados junto (`clicks / impressions` também dá 0,15), então o CTR real dessas campanhas é desconhecido. Só se sabe que é de pelo menos 15%.
+- O teto do `ctr` não atinge campanhas ao acaso: as campanhas no teto têm `klike_score` mediano de 74, contra 59 nas demais (Mann-Whitney, p ≈ 2 × 10⁻⁷), e 74% delas usam hook, contra 49%.
 - `engagement_rate` truncado em 0,10: 7 campanhas, todas do TikTok (5% da plataforma), sem diferença de `klike_score` em relação às demais (p ≈ 0,9).
-- Pisos com efeito desprezível: `impressions` tem mínimo de exatamente 1.000 em 2 campanhas, cujo `ctr` indica 983 e 990; `video_duration_s` tem um leve acúmulo em 5 s (16 campanhas, contra 10 em 6 s), quase todas do TikTok.
+- Pisos com efeito desprezível: `impressions` tem mínimo de exatamente 1.000 em 2 campanhas, cujo `ctr` indica 983 e 990. `video_duration_s` tem um leve acúmulo em 5 s (16 campanhas, contra 10 em 6 s), quase todas do TikTok.
 
 Decisões:
 
@@ -253,7 +194,7 @@ Decisões:
 - As recomendações do engine não projetam CTR acima de 15%.
 - Pisos de `impressions` e `video_duration_s`: apenas registrados.
 
-Por quê: remover as campanhas no teto descartaria 10,5% do treino e, como o teto concentra as campanhas de maior `klike_score`, enviesaria o modelo para baixo. O valor real não pode ser recuperado, porque os cliques foram ajustados junto. A coluna indicadora informa ao modelo que o valor real é "pelo menos 0,15", e não exatamente 0,15. Para a análise, o teto tem uma consequência direta: ele achata a diferença entre as melhores campanhas, então a relação entre CTR e `klike_score` vai parecer mais fraca do que é. No engine, prever CTR acima de 15% seria extrapolar além do que os dados mostram.
+Por quê: considerei remover as campanhas no teto, mas isso descartaria 10,5% do treino e, como o teto concentra as campanhas de maior `klike_score`, enviesaria o modelo para baixo. O valor real não pode ser recuperado, porque os cliques foram ajustados junto. A coluna indicadora informa ao modelo que o valor real é "pelo menos 0,15", e não exatamente 0,15. Para a análise, o teto tem uma consequência direta: ele achata a diferença entre as melhores campanhas, então a relação entre CTR e `klike_score` vai parecer mais fraca do que é. No engine, prever CTR acima de 15% seria extrapolar além do que os dados mostram.
 
 ### 5. Distribuição de cada variável
 
@@ -261,7 +202,7 @@ A partir daqui, a análise usa o treino com os erros de registro corrigidos (4.3
 
 ![Distribuição do klike_score](figures/01_klike_score.png)
 
-O `klike_score` é aproximadamente simétrico (média 60,1, mediana 61,2), vai de 10 a 99 e não tem acúmulo nos extremos. Não precisa de transformação.
+O `klike_score` é aproximadamente simétrico (média 60, mediana 61), vai de 10 a 99 e não tem acúmulo nos extremos. Não precisa de transformação.
 
 ![Distribuição das variáveis numéricas](figures/02_numericas.png)
 
@@ -290,20 +231,20 @@ Para comparar campanhas de tamanhos diferentes, as métricas de performance são
 
 O que encontrei:
 
-- Todos os atributos binários do criativo se associam ao `klike_score`. Os maiores efeitos são texto médio em vez de alto (+19,2 pontos, IC 95% de +13,0 a +23,6) e hook (+17,6, IC de +14,4 a +20,5).
-- Hook e rosto agem nas métricas de atenção: hook aumenta CTR (+66%), engajamento (+56%) e retenção (+42%); rosto aumenta o engajamento (+51%).
-- Nenhum atributo do criativo muda significativamente a conversão ou o ROAS. Essas métricas dependem da audiência: retargeting aumenta a conversão em 89% e o ROAS em 69%, mas não muda o score.
+- Todos os atributos binários do criativo se associam ao `klike_score`. Os maiores efeitos são texto médio em vez de alto (+19 pontos, IC 95% de +13 a +24) e hook (+18, IC de +14 a +21).
+- Hook e rosto agem nas métricas de atenção: hook aumenta CTR (+66%), engajamento (+56%) e retenção (+42%). Rosto aumenta o engajamento (+51%).
+- Nenhum atributo do criativo muda significativamente a conversão ou o ROAS. Essas métricas dependem da audiência: retargeting aumenta a conversão em 89% e o ROAS em 69%. Na comparação direta, retargeting também parece não mudar o score, mas isso é efeito de composição (passo 7).
 - CTA e legenda elevam o score sem efeito detectável nas métricas.
 - Duração do vídeo e proporção música/voz não se relacionam com o score, o CTR ou a retenção.
 - Entre as métricas, o score acompanha o CTR (Spearman +0,56) e a retenção (+0,42). Os volumes são redundantes entre si (cliques e gasto, +0,92) e quase não se relacionam com o score.
 - Os atributos do criativo são praticamente independentes entre si (|r| ≤ 0,11), então o efeito de um não é reflexo de outro.
 
-Conclusão: o `klike_score` avalia o criativo, e não a audiência ou o orçamento. Ele recompensa o que prende a atenção (hook, rosto, pouco texto) e também boas práticas (CTA, legenda) que não aparecem diretamente nas métricas.
+Conclusão: o `klike_score` avalia principalmente o criativo, e não o orçamento. Ele recompensa o que prende a atenção (hook, rosto, pouco texto) e também boas práticas (CTA, legenda) que não aparecem diretamente nas métricas.
 
 <details>
 <summary><b>Por que diferença de medianas, bootstrap e Holm?</b></summary>
 
-As métricas têm cauda longa e tetos (passos 4.4 e 5), então medianas e Mann-Whitney são mais robustos que médias e teste t. Os intervalos de confiança das diferenças de mediana vêm de bootstrap (2.000 reamostragens), porque não há fórmula simples para eles. A correção de Holm é aplicada às 42 comparações da seção; efeitos com p < 0,05 só antes da correção, como rosto no CTR (+35%), ficam como hipóteses.
+As métricas têm cauda longa e tetos (passos 4.4 e 5), então medianas e Mann-Whitney são mais robustos que médias e teste t. Os intervalos de confiança das diferenças de mediana vêm de bootstrap (2.000 reamostragens), porque não há fórmula simples para eles. A correção de Holm é aplicada às 42 comparações da seção. Efeitos com p < 0,05 só antes da correção, como rosto no CTR (+35%), ficam como hipóteses.
 </details>
 
 ### 7. Efeito de uma terceira variável: a plataforma
@@ -314,11 +255,12 @@ O que encontrei:
 
 - O efeito dos atributos no `klike_score` é praticamente o mesmo nas três plataformas: hook vale de 17 a 18 pontos, texto médio em vez de alto de 17 a 19, e rosto de 9 a 12 em todas. No LinkedIn, só o hook é significativo após a correção, por ter apenas 66 campanhas, mas os tamanhos de efeito são da mesma ordem.
 - Nas métricas, os efeitos variam mais, mas com evidência fraca: rosto aumenta o CTR no TikTok e no LinkedIn (+66% e +64%), mas não no Meta (+3%), onde o ganho aparece no engajamento (+50%).
-- O formato só parece importar no LinkedIn, onde vídeos verticais têm score bem menor (42,6 contra 58,2 dos horizontais). Mas são só 9 campanhas, com bem menos hook (22% contra 54%) e rosto (33% contra 54%): a diferença vem da composição desses vídeos, e não do formato.
+- O formato só parece importar no LinkedIn, onde vídeos verticais têm score bem menor (43 contra 58 dos horizontais). Mas são só 9 campanhas, com bem menos hook (22% contra 54%) e rosto (33% contra 54%): a diferença vem da composição desses vídeos, e não do formato.
 - Duração e proporção música/voz também não têm efeito dentro de cada plataforma: nenhuma das 24 correlações com score, CTR, retenção e engajamento é significativa após a correção. No TikTok, vídeos acima de 30 s têm CTR mediano menor (2,7% contra 5,6%), mas são só 5 campanhas. Os dados não sustentam uma duração ideal por plataforma.
 - A categoria do anunciante também não muda o efeito dos atributos. Todos os efeitos no score são positivos nas cinco categorias, e o hook é significativo em todas. Os tamanhos variam mais que entre plataformas (ex: hook de +11,5 pontos no E-commerce a +22,9 no Lead Gen), mas com grupos de 49 a 137 campanhas, e incluir essas variações no modelo como interações não melhora o erro (Parte 2). Nas métricas, nenhuma das 60 comparações por categoria é significativa.
 - O LinkedIn tem score mediano 6 a 7 pontos abaixo das outras plataformas. Parte disso é composição (mais campanhas com texto alto), mas comparando campanhas com o mesmo hook, rosto e densidade de texto ainda restam 4 a 5 pontos de diferença.
 - Rosto aumenta o engajamento em todas as faixas etárias, com efeito menor no público 45+ (+15%, contra +45% a +61%).
+- Retargeting parecia não mudar o score (passo 6), mas as campanhas de retargeting têm menos hook (46% contra 53%), o que esconde o efeito. Comparando campanhas com o mesmo hook e a mesma densidade de texto, retargeting soma cerca de 4 pontos, o mesmo que o modelo estima (Parte 2).
 
 Conclusão: para o score, o que funciona no TikTok funciona no LinkedIn, e o que funciona no E-commerce funciona em SaaS. A plataforma muda o nível de partida, e não o efeito de cada atributo. Por isso as recomendações podem usar efeitos comuns, ajustando o ponto de partida por plataforma.
 
@@ -328,7 +270,7 @@ Problemas a corrigir no pré-processamento:
 
 1. Tipos: `has_subtitle` para booleano (e `date` para data, se a data entrar no modelo).
 2. Os 10 erros de registro, com `src/limpeza.py`.
-3. Faltantes: `cpc` e `revenue` recalculados pelas outras colunas; demais colunas com a mediana do treino e coluna indicadora.
+3. Faltantes: `cpc` e `revenue` recalculados pelas outras colunas. Demais colunas com a mediana do treino e coluna indicadora.
 4. ROAS de campanhas sem receita medida como "não se aplica", e não como zero.
 5. Indicadoras de teto para `ctr` e `engagement_rate`.
 6. Transformação log nas variáveis de cauda longa.
@@ -347,7 +289,15 @@ Hipóteses a testar com o modelo:
 
 Notebook: [`notebooks/02_modelo.ipynb`](notebooks/02_modelo.ipynb)
 
-### Features
+Roteiro:
+
+1. Features
+2. Validação e escolha do modelo
+3. Checagens
+4. Resultado no teste
+5. Importância das features
+
+### 1. Features
 
 Decisão: treinar dois modelos, com conjuntos de features diferentes.
 
@@ -356,20 +306,25 @@ Decisão: treinar dois modelos, com conjuntos de features diferentes.
 | Pré-veiculação | atributos do criativo (hook, rosto, CTA, legenda, densidade de texto, formato, duração, música/voz) e contexto de mídia (plataforma, categoria, objetivo, público, retargeting) | antes de a campanha ir ao ar |
 | Pós-veiculação | o anterior mais as métricas de performance, como taxas: CTR, CPC, engajamento, retenção, conversão e ROAS | depois que a campanha roda |
 
-Por quê: as métricas de performance só existem depois da veiculação. O modelo pré-veiculação é o que permite simular mudanças no criativo de uma campanha nova, e por isso é o usado no engine (Parte 3). O pós-veiculação mede quanto do score é explicado pelo desempenho observado.
+Por quê: as métricas de performance só existem depois da veiculação. O modelo pré-veiculação é o que permite simular mudanças no criativo de uma campanha nova, e por isso é o usado no engine (Parte 3). O pós-veiculação mede quanto do score é explicado pelo desempenho observado. Considerei um modelo só, com todas as features, mas ele não serviria para campanhas que ainda não foram ao ar nem para simular mudanças no criativo.
 
 Features novas, todas motivadas pela EDA:
 
 - `watch_ratio` (tempo assistido / duração) e `conversion_rate` (conversões / cliques): taxas comparáveis entre campanhas de tamanhos diferentes. O tempo assistido absoluto é dominado pela duração do vídeo (passo 6).
-- Taxas em log (CTR, CPC, engajamento, conversão, ROAS): a relação com o score é multiplicativa. Em testes exploratórios com validação cruzada, a versão em log teve erro levemente menor no modelo pós-veiculação (RMSE 6,18 contra 6,33).
+- Taxas em log (CTR, CPC, engajamento, conversão, ROAS): a relação com o score é multiplicativa. Na validação cruzada, a versão em log erra menos no modelo pós-veiculação (RMSE 6,18 contra 6,80 com taxas lineares).
 - `ctr_no_teto` e `engagement_no_teto`: o valor real é desconhecido acima do teto (passo 4.4).
 - `roas_nao_se_aplica`: receita não medida, em vez de ROAS zero (passo 4.3).
 
-Ficaram de fora: volumes (impressões, cliques, gasto, conversões, receita), que medem o tamanho da campanha e quase não se relacionam com o score (passo 6); `date`, sem sazonalidade no score; e `campaign_id`.
+Ficaram de fora: volumes (impressões, cliques, gasto, conversões, receita), que medem o tamanho da campanha e quase não se relacionam com o score (passo 6), `date`, porque o score não varia ao longo do ano (mediana entre 60 e 62 em todos os trimestres), e `campaign_id`.
 
-Codificação: toda a limpeza da EDA é o primeiro passo do pipeline (`LimpezaCampanhas`), e por isso é reajustada dentro de cada fold e aplicada igual em campanhas novas. Categóricas em one-hot com `handle_unknown="ignore"`, incluindo `text_density` e faixa etária, cujos efeitos não seguem a ordem das categorias (passo 8). Binárias sem padronização, para que o coeficiente seja o efeito em pontos de ter o atributo. Numéricas com mediana do treino, coluna indicadora de falta e padronização.
+Pipeline:
 
-### Validação e escolha do modelo
+- A limpeza da EDA é o primeiro passo (`LimpezaCampanhas`): é reajustada dentro de cada fold e aplicada igual a campanhas novas.
+- Categóricas em one-hot, aceitando categorias novas, incluindo `text_density` e faixa etária, cujos efeitos não seguem a ordem das categorias (passo 8).
+- Binárias sem padronização, para que o coeficiente seja o efeito em pontos de ter o atributo.
+- Numéricas com a mediana do treino nos vazios, coluna indicadora de falta e padronização.
+
+### 2. Validação e escolha do modelo
 
 Decisão: validação cruzada 5-fold repetida 3 vezes no treino, com os mesmos folds para todos os candidatos e hiperparâmetros escolhidos por busca em grade. Métrica principal, definida antes dos resultados: RMSE, em pontos de score. Modelo escolhido: Ridge nos dois conjuntos.
 
@@ -383,14 +338,17 @@ Decisão: validação cruzada 5-fold repetida 3 vezes no treino, com os mesmos f
 | Pós-veiculação | Gradient Boosting | 6,15 | 4,87 | 0,85 |
 | Pós-veiculação | Random Forest | 8,05 | 6,51 | 0,74 |
 
-Por quê: o Ridge e o Gradient Boosting empatam nos dois conjuntos. Comparando fold a fold, as diferenças são de 0,02 ± 0,16 ponto no pré-veiculação e −0,03 ± 0,33 no pós-veiculação, e cada modelo ganha em cerca de metade dos folds. No empate, fico com o modelo mais simples e interpretável. O melhor Gradient Boosting usa árvores de uma única divisão, o que o torna um modelo aditivo sem interações, e o Random Forest é pior em 14 de 15 folds no pré-veiculação e em 15 de 15 no pós-veiculação. Isso confirma que os efeitos são aditivos e iguais entre plataformas (passos 6 e 7): com 400 campanhas, a flexibilidade extra das árvores não traz ganho.
+Por quê:
 
-Duas checagens confirmam a escolha:
+- O Ridge e o Gradient Boosting empatam nos dois conjuntos: comparando fold a fold, as diferenças são de 0,02 ± 0,16 ponto no pré-veiculação e −0,03 ± 0,33 no pós-veiculação, e cada um ganha em cerca de metade dos folds. No empate, preferi o Ridge ao Gradient Boosting por ser mais simples e porque seus coeficientes dão o efeito de cada atributo em pontos, que é o que o engine usa. Na primeira rodada, o Ridge parecia ganhar, mas a melhor configuração do Gradient Boosting tinha caído no limite da grade de hiperparâmetros. Ao ampliar a grade, a vantagem virou empate.
+- O melhor Gradient Boosting usa árvores de uma única divisão, o que o torna um modelo aditivo sem interações, e o Random Forest é pior em 14 de 15 folds no pré-veiculação e em 15 de 15 no pós-veiculação. Os efeitos são aditivos e iguais entre plataformas (passos 6 e 7): com 400 campanhas, a flexibilidade extra das árvores não traz ganho.
+
+### 3. Checagens
 
 - Interações atributo × plataforma e atributo × categoria não melhoram o Ridge (RMSE 8,81 e 8,88, contra 8,74), como previsto no passo 7.
 - Com o `klike_score` embaralhado, o R² cai para abaixo de zero: o desempenho vem de relações reais, e não de vazamento.
 
-### Resultado no teste
+### 4. Resultado no teste
 
 O teste foi usado uma única vez, com os modelos já escolhidos.
 
@@ -403,12 +361,11 @@ O teste foi usado uma única vez, com os modelos já escolhidos.
 ![Previsto × real no teste](figures/07_previsto_vs_real.png)
 
 - Só com o criativo e o contexto, o modelo erra em média 6,6 pontos numa escala de 0 a 100, contra 11,7 de prever sempre a média. Os valores de teste são próximos aos da validação cruzada, então a busca de hiperparâmetros não inflou a estimativa.
-- O pré-veiculação erra até 10 pontos em 74% das campanhas do teste e o pós-veiculação em 92%, contra 48% do baseline. Os dois também põem as campanhas na ordem certa (Spearman de 0,81 e 0,91 entre previsto e real). No treino, com previsões fora do fold (limpeza e `alpha` refeitos sem a campanha prevista), os números são praticamente os mesmos (75% e 89%), o que confirma que o modelo não está sobreajustado.
+- O pré-veiculação erra até 10 pontos em 74% das campanhas do teste e o pós-veiculação em 92%, contra 48% do baseline, e os dois põem as campanhas na ordem certa (Spearman de 0,81 e 0,91 entre previsto e real). No treino, com previsões fora do fold (limpeza e `alpha` refeitos a cada fold), os números são praticamente os mesmos (75% e 89%): o modelo não está sobreajustado.
 - O modelo pré-veiculação comprime os extremos: subestima scores muito altos e superestima os muito baixos. O que ele não explica depende do desempenho observado, como o CTR, e o modelo pós-veiculação corrige boa parte disso.
-- O erro é maior no TikTok (MAE 8,2 no pré-veiculação) que no Meta (6,0) e no LinkedIn (5,0).
-- Os resíduos não têm padrão em relação à previsão, o que indica que a forma linear é adequada.
+- O erro é maior no TikTok (MAE 8,2 no pré-veiculação) que no Meta (6,0) e no LinkedIn (5,0). Os resíduos não têm padrão em relação à previsão, o que indica que a forma linear é adequada.
 
-### Importância das features
+### 5. Importância das features
 
 ![Efeito estimado de cada atributo](figures/08_coeficientes.png)
 
@@ -416,9 +373,9 @@ O teste foi usado uma única vez, com os modelos já escolhidos.
 
 - O que mais pesa no score é o criativo: hook (+17,1 pontos), texto médio em vez de alto (+15,1), rosto (+11,2), legenda (+7,7), texto baixo em vez de alto (+7,5) e CTA (+7,2), mantendo o resto fixo. Os efeitos ajustados são quase iguais às diferenças brutas da EDA, porque os atributos do criativo são quase independentes entre si.
 - No modelo pós-veiculação, o CTR é a segunda feature mais importante, depois do hook, seguido de ROAS e engajamento.
-- Plataforma, categoria, objetivo, formato, duração e música/voz quase não importam. O LinkedIn fica de 3,5 a 5,2 pontos abaixo das outras plataformas.
+- Plataforma, categoria, objetivo, formato, duração e música/voz quase não importam. O LinkedIn fica de 3,5 a 5,2 pontos abaixo das outras plataformas, e retargeting soma cerca de 4 pontos.
 
-Faz sentido do ponto de vista de negócio: o score mede a qualidade do criativo, e os atributos que mais pesam são os que prendem a atenção nos primeiros segundos, coerentes com o efeito deles no CTR e na retenção (passo 6). A importância é medida por permutação nas features já limpas, no teste, com os níveis de cada categoria embaralhados juntos.
+Faz sentido do ponto de vista de negócio: o score mede a qualidade do criativo, e os atributos que mais pesam são os que prendem a atenção nos primeiros segundos, coerentes com o efeito deles no CTR e na retenção (passo 6). A importância é medida por permutação no teste, com os níveis de cada categoria embaralhados juntos. Na primeira versão, embaralhei as colunas brutas (ex: `clicks`), o que criava campanhas impossíveis que a limpeza tentava corrigir e inflava a importância das métricas. Por isso a permutação é feita nas features já limpas.
 
 <details>
 <summary><b>Por que o engine usa o modelo pré-veiculação, se o pós-veiculação erra menos?</b></summary>
@@ -439,9 +396,9 @@ engine.recomendar(campanha)  # campanha = uma linha do dataset (dict ou Series)
 
 Exemplo real, uma campanha do teste (TikTok, E-commerce, público 18-24, score 30,2):
 
-1. Adicionar um hook nos 3 primeiros segundos: pode aumentar o klike_score em cerca de 17,1 pontos (previsão de 41 para 58; IC 95%: +15,5 a +18,8); no TikTok, campanhas assim têm CTR mediano 83% maior (o desta passaria de 2,2% para cerca de 4,0%); nas três plataformas juntas, a taxa de engajamento mediana é 56% maior.
-2. Incluir um rosto humano no vídeo: pode aumentar o klike_score em cerca de 11,2 pontos (previsão de 41 para 52; IC 95%: +9,1 a +12,6); nas três plataformas juntas, a taxa de engajamento mediana é 51% maior.
-3. Adicionar legendas: pode aumentar o klike_score em cerca de 7,7 pontos (previsão de 41 para 48; IC 95%: +6,2 a +9,4).
+1. Adicionar um hook nos 3 primeiros segundos: pode aumentar o klike_score em cerca de 17,1 pontos (previsão de 41 para 58, IC 95%: +15,5 a +18,8). No TikTok, campanhas assim têm CTR mediano 83% maior (o desta passaria de 2,2% para cerca de 4,0%). Nas três plataformas juntas, a taxa de engajamento mediana é 56% maior.
+2. Incluir um rosto humano no vídeo: pode aumentar o klike_score em cerca de 11,2 pontos (previsão de 41 para 52, IC 95%: +9,1 a +12,6). Nas três plataformas juntas, a taxa de engajamento mediana é 51% maior.
+3. Adicionar legendas: pode aumentar o klike_score em cerca de 7,7 pontos (previsão de 41 para 48, IC 95%: +6,2 a +9,4).
 4. Incluir um call-to-action: pode aumentar o klike_score em cerca de 7,2 pontos.
 5. O CTR desta campanha (2,2%) está abaixo da mediana das campanhas do TikTok (6,2%). Sugestão: testar em A/B variações da abertura e da primeira cena do vídeo. Chegar a esse nível elevaria o klike_score em cerca de 7,1 pontos.
 
@@ -449,22 +406,22 @@ Exemplo real, uma campanha do teste (TikTok, E-commerce, público 18-24, score 3
 
 | Tipo | Quando aparece | Como é quantificada |
 |---|---|---|
-| Criativo | a campanha não tem hook, rosto, legenda ou CTA, ou não tem texto médio | ganho no score pelo modelo pré-veiculação, com IC 95% por bootstrap; efeito observado no CTR e no engajamento da plataforma |
+| Criativo | a campanha não tem hook, rosto, legenda ou CTA, ou não tem texto médio | ganho no score pelo modelo pré-veiculação, com IC 95% por bootstrap, e efeito observado no CTR e no engajamento da plataforma |
 | Performance | CTR, retenção, engajamento, conversão ou ROAS abaixo da referência da plataforma | ganho no score de chegar à referência, pelo modelo pós-veiculação |
-| Mídia | campanha de prospecção com objetivo de conversão, tráfego ou instalação | aumento de conversão e ROAS observado com retargeting |
+| Mídia | campanha de prospecção com objetivo de conversão, tráfego ou instalação | ganho no score pelo modelo pré-veiculação (cerca de 4 pontos), e aumento de conversão e ROAS observado com retargeting |
 
-O ganho no score é uma simulação. O modelo prevê o score da campanha como ela é e o de uma cópia em que só a recomendação foi aplicada (ex: com hook); a diferença é o ganho. Nas recomendações de criativo, a simulação usa o modelo pré-veiculação. Como ele é linear, o ganho é o coeficiente do atributo, igual para qualquer campanha, e o IC 95% vem de 200 reamostragens do treino com o modelo reajustado em cada uma. Nas de performance, usa o modelo pós-veiculação, com a métrica levada até a referência da plataforma. Por isso os scores citados ("previsão de 41 para 58") são previsões do modelo, e não o score real da campanha.
+O ganho no score é uma simulação. O modelo prevê o score da campanha como ela é e o de uma cópia em que só a recomendação foi aplicada (ex: com hook), e a diferença é o ganho. Nas recomendações de criativo e de mídia, a simulação usa o modelo pré-veiculação. Como ele é linear, o ganho é o coeficiente do atributo, igual para qualquer campanha, e o IC 95% vem de 200 reamostragens do treino com o modelo reajustado em cada uma. Nas de performance, usa o modelo pós-veiculação, com a métrica levada até a referência da plataforma. Por isso os scores citados ("previsão de 41 para 58") são previsões do modelo, e não o score real da campanha.
 
 Decisões:
 
-- Priorização pelo ganho estimado no score; mídia por último, porque não muda o score (que avalia o criativo), apenas o retorno. O score é a medida de impacto por ser a única comum a todas as recomendações: CTA e legenda, por exemplo, elevam o score sem efeito detectável no CTR (passo 6). Os efeitos nas métricas aparecem no texto de cada recomendação.
+- Priorização pelo ganho estimado no score, para todos os tipos. O score é a medida de impacto por ser a única comum a todas as recomendações: CTA e legenda, por exemplo, elevam o score sem efeito detectável no CTR (passo 6). Os efeitos nas métricas aparecem no texto de cada recomendação.
 - Contexto: os efeitos nas métricas são calculados na plataforma da campanha, e o de rosto no engajamento, na faixa etária. Os efeitos passam pelo mesmo critério da EDA: Mann-Whitney com correção de Holm sobre todas as comparações que o engine pode citar. Se o efeito não for significativo no grupo da campanha, ou o grupo tiver menos de 15 campanhas, o engine usa todas as campanhas juntas, e diz isso no texto. Se nem assim houver evidência, o efeito não é citado. A categoria do anunciante não muda o efeito dos atributos (passo 7), então não altera as recomendações.
-- Referência de performance: a mediana da plataforma; para quem já está acima dela, o quartil superior e depois o nível dos 10% melhores. Recomendações de performance com ganho abaixo de 0,5 ponto só entram se faltarem recomendações.
+- Referência de performance: a mediana da plataforma. Para quem já está acima dela, o quartil superior e depois o nível dos 10% melhores. Recomendações de performance com ganho abaixo de 0,5 ponto só entram se faltarem recomendações.
 - O CTR projetado nunca passa de 15%, o teto observado nos dados (passo 4.4).
 - Campanhas que já têm quase tudo recebem também o que manter, com quanto cada atributo sustenta do score. Assim todas as 500 campanhas recebem pelo menos 3 recomendações.
-- Duração e música/voz não geram recomendações: os dados não mostraram efeito delas, nem no geral nem dentro de cada plataforma (passos 6 e 7), e recomendá-las seria inventar um padrão.
+- Duração e música/voz não geram recomendações, mesmo com o enunciado usando duração como exemplo. Considerei incluí-las, mas os dados não mostraram efeito delas, nem no geral nem dentro de cada plataforma (passos 6 e 7), e recomendá-las seria inventar um padrão.
 
-Por quê: o enunciado pede recomendações acionáveis, quantificadas, contextuais e priorizadas. O modelo pré-veiculação quantifica o que muda no criativo; as métricas por plataforma dão o contexto; e o modelo pós-veiculação quantifica o que fazer quando o criativo já tem os atributos certos, mas a execução ainda não entrega.
+Por quê: o enunciado pede recomendações acionáveis, quantificadas, contextuais e priorizadas. O modelo pré-veiculação quantifica o que muda no criativo e na mídia, as métricas por plataforma dão o contexto, e o modelo pós-veiculação quantifica o que fazer quando o criativo já tem os atributos certos, mas a execução ainda não entrega.
 
 ### Validação
 
@@ -476,4 +433,14 @@ Por quê: o enunciado pede recomendações acionáveis, quantificadas, contextua
 
 - Os efeitos vêm de dados observacionais: o dataset mostra que campanhas com hook têm score maior, mas não prova que adicionar um hook causa o aumento. A confirmação seria um teste A/B.
 - Os ganhos são estimados um a um e não devem ser somados: adicionar um hook também aumenta o CTR, que tem sua própria recomendação.
-- As sugestões de ação das recomendações de performance (ex: testar outra abertura) são hipóteses de marketing; o que vem dos dados é quanto vale melhorar a métrica.
+- As sugestões de ação das recomendações de performance (ex: testar outra abertura) são hipóteses de marketing. O que vem dos dados é quanto vale melhorar a métrica.
+
+---
+
+## Parte 4 — Visão de Produto
+
+Respostas completas em [`VISAO_DE_PRODUTO.md`](VISAO_DE_PRODUTO.md). Em resumo:
+
+- Features do vídeo: medir os atributos que já mostraram efeito (tempo até o hook, quantidade de texto na tela, tempo de rosto em tela) em vez de marcá-los como sim ou não. O erro que sobra no modelo vem da falta de informação, e não do algoritmo.
+- Produção: o engine entra em dois momentos do Klike, no envio do criativo (recomendações de criativo, modelo pré-veiculação) e depois que a campanha roda (recomendações de performance, modelo pós-veiculação), servido por uma API com o modelo treinado e com a extração de features do vídeo em segundo plano.
+- Com mais tempo: testes A/B para medir o efeito causal das recomendações, custo de cada ação para recomendar combinações e modelos próprios para CTR e engajamento.
