@@ -327,7 +327,7 @@ Problemas a corrigir no pré-processamento:
 Hipóteses a testar com o modelo:
 
 1. Atributos do criativo e contexto explicam boa parte do score, com efeitos aproximadamente aditivos. Uma regressão linear deve ir bem, e interações por plataforma devem ajudar pouco.
-2. `text_density` deve ser tratada como categórica, e não como ordinal: o efeito não é monotônico (média > baixa > alta).
+2. `text_density` deve ser tratada como categórica, e não como ordinal: o efeito não segue a ordem dos níveis, já que o nível do meio é o melhor (média > baixa > alta).
 3. As métricas de atenção (`ctr`, retenção) devem aumentar o poder preditivo, mas só existem depois que o anúncio roda.
 4. Duração, música/voz, formato, categoria e objetivo devem ter importância baixa.
 
@@ -357,7 +357,7 @@ Features novas, todas motivadas pela EDA:
 
 Ficaram de fora: volumes (impressões, cliques, gasto, conversões, receita), que medem o tamanho da campanha e quase não se relacionam com o score (passo 6); `date`, sem sazonalidade no score; e `campaign_id`.
 
-Codificação: toda a limpeza da EDA é o primeiro passo do pipeline (`LimpezaCampanhas`), e por isso é reajustada dentro de cada fold e aplicada igual em campanhas novas. Categóricas em one-hot com `handle_unknown="ignore"`, incluindo `text_density` e faixa etária, cujos efeitos não são monotônicos (passo 8). Binárias sem padronização, para que o coeficiente seja o efeito em pontos de ter o atributo. Numéricas com mediana do treino, coluna indicadora de falta e padronização.
+Codificação: toda a limpeza da EDA é o primeiro passo do pipeline (`LimpezaCampanhas`), e por isso é reajustada dentro de cada fold e aplicada igual em campanhas novas. Categóricas em one-hot com `handle_unknown="ignore"`, incluindo `text_density` e faixa etária, cujos efeitos não seguem a ordem das categorias (passo 8). Binárias sem padronização, para que o coeficiente seja o efeito em pontos de ter o atributo. Numéricas com mediana do treino, coluna indicadora de falta e padronização.
 
 ### Validação e escolha do modelo
 
@@ -367,13 +367,13 @@ Decisão: validação cruzada 5-fold repetida 3 vezes no treino, com os mesmos f
 |---|---|---|---|---|
 | — | baseline (média) | 15,87 | 12,84 | −0,02 |
 | Pré-veiculação | Ridge | 8,73 | 6,97 | 0,69 |
-| Pré-veiculação | Gradient Boosting | 8,91 | 7,09 | 0,68 |
+| Pré-veiculação | Gradient Boosting | 8,76 | 7,01 | 0,69 |
 | Pré-veiculação | Random Forest | 9,59 | 7,78 | 0,63 |
 | Pós-veiculação | Ridge | 6,18 | 4,88 | 0,84 |
-| Pós-veiculação | Gradient Boosting | 6,62 | 5,36 | 0,82 |
+| Pós-veiculação | Gradient Boosting | 6,15 | 4,87 | 0,85 |
 | Pós-veiculação | Random Forest | 8,05 | 6,51 | 0,74 |
 
-Por quê: o Ridge tem o menor erro nos dois conjuntos. No pré-veiculação, a vantagem sobre o Gradient Boosting (0,18 ± 0,27 ponto, comparando fold a fold) é um empate, e no empate fica o modelo mais simples e interpretável. No pós-veiculação, o Ridge é melhor em 13 de 15 folds. As árvores não ganham porque os efeitos são aditivos e iguais entre plataformas (passos 6 e 7): com 400 campanhas, a flexibilidade extra só acrescenta variância.
+Por quê: o Ridge e o Gradient Boosting empatam nos dois conjuntos. Comparando fold a fold, as diferenças são de 0,02 ± 0,16 ponto no pré-veiculação e −0,03 ± 0,33 no pós-veiculação, e cada modelo ganha em cerca de metade dos folds. No empate, fico com o modelo mais simples e interpretável. O melhor Gradient Boosting usa árvores de uma única divisão, o que o torna um modelo aditivo sem interações, e o Random Forest é pior em 14 de 15 folds no pré-veiculação e em 15 de 15 no pós-veiculação. Isso confirma que os efeitos são aditivos e iguais entre plataformas (passos 6 e 7): com 400 campanhas, a flexibilidade extra das árvores não traz ganho.
 
 Duas checagens confirmam a escolha:
 
@@ -393,6 +393,7 @@ O teste foi usado uma única vez, com os modelos já escolhidos.
 ![Previsto × real no teste](figures/07_previsto_vs_real.png)
 
 - Só com o criativo e o contexto, o modelo erra em média 6,6 pontos numa escala de 0 a 100, contra 11,7 de prever sempre a média. Os valores de teste são próximos aos da validação cruzada, então a busca de hiperparâmetros não inflou a estimativa.
+- O pré-veiculação erra até 10 pontos em 74% das campanhas do teste e o pós-veiculação em 92%, contra 48% do baseline. Os dois também põem as campanhas na ordem certa (Spearman de 0,81 e 0,91 entre previsto e real). No treino, com previsões fora do fold (limpeza e `alpha` refeitos sem a campanha prevista), os números são praticamente os mesmos (75% e 89%), o que confirma que o modelo não está sobreajustado.
 - O modelo pré-veiculação comprime os extremos: subestima scores muito altos e superestima os muito baixos. O que ele não explica depende do desempenho observado, como o CTR, e o modelo pós-veiculação corrige boa parte disso.
 - O erro é maior no TikTok (MAE 8,2 no pré-veiculação) que no Meta (6,0) e no LinkedIn (5,0).
 - Os resíduos não têm padrão em relação à previsão, o que indica que a forma linear é adequada.
